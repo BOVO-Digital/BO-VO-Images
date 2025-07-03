@@ -11,6 +11,7 @@
 #   - Mise à jour automatique des fichiers .env.
 #   - Suivi de l'état des services via des fichiers .pid.
 #   - Redirection des logs vers des fichiers .log avec un bouton "Voir Log".
+#   - AMÉLIORATION: Crée le fichier .env.local du frontend s'il n'existe pas.
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -117,9 +118,14 @@ class ServiceManager(tk.Tk):
 
     def validate_and_setup_paths(self, root_path):
         self.backend_dir = os.path.join(root_path, 'backend'); self.frontend_dir = os.path.join(root_path, 'frontend'); self.frontend_build_dir = os.path.join(self.frontend_dir, 'dist'); self.python_venv = os.path.join(self.backend_dir, 'venv', 'Scripts', 'python.exe'); self.backend_env_file = os.path.join(self.backend_dir, '.env'); self.frontend_env_file = os.path.join(self.frontend_dir, '.env.local')
-        errors = [f"- Dossier '{name}' introuvable." for name, path in {"backend":self.backend_dir, "frontend/dist": self.frontend_build_dir, "backend/core": os.path.join(self.backend_dir, 'core')}.items() if not os.path.isdir(path)]
-        errors.extend([f"- Fichier '{name}' introuvable." for name, path in {"venv":self.python_venv, ".env": self.backend_env_file, ".env.local":self.frontend_env_file}.items() if not os.path.exists(path)])
-        if errors: messagebox.showerror("Chemins Invalides", "Impossible de configurer le projet :\n\n" + "\n".join(errors)); return False
+        
+        ### MODIFICATION ###: L'absence de .env.local n'est plus une erreur bloquante.
+        errors = [f"- Dossier '{name}' introuvable." for name, path in {"backend":self.backend_dir, "frontend/dist": self.frontend_build_dir}.items() if not os.path.isdir(path)]
+        errors.extend([f"- Fichier essentiel '{name}' introuvable." for name, path in {"venv":self.python_venv, "backend/.env": self.backend_env_file}.items() if not os.path.exists(path)])
+        
+        if errors:
+            messagebox.showerror("Chemins Invalides", "Impossible de configurer le projet :\n\n" + "\n".join(errors)); return False
+        
         self.load_backend_env_vars()
         return True
     
@@ -131,26 +137,57 @@ class ServiceManager(tk.Tk):
                     key, value = line.split('=', 1); self.backend_env[key.strip()] = value.strip().strip("'\"")
         
     def read_ports_from_files(self):
+        # La lecture est maintenant protégée pour ne pas échouer si les fichiers sont absents ou malformés.
         try:
-            with open(self.frontend_env_file, 'r') as f: content = f.read(); match = re.search(r'VITE_API_BASE_URL\s*=\s*https?://[^:]+:(\d+)', content); self.backend_port_var.set(match.group(1))
-        except: pass
+            with open(self.frontend_env_file, 'r') as f:
+                content = f.read()
+                match = re.search(r'VITE_API_BASE_URL\s*=\s*https?://[^:]+:(\d+)', content)
+                if match: self.backend_port_var.set(match.group(1))
+        except IOError: pass # Fichier n'existe pas, on ignore.
+        
         try:
-            with open(self.backend_env_file, 'r') as f: content = f.read(); match = re.search(r'CORS_ALLOWED_ORIGINS\s*=\s*https?://[^:]+:(\d+)', content); self.frontend_port_var.set(match.group(1))
-        except: pass
+            with open(self.backend_env_file, 'r') as f:
+                content = f.read()
+                match = re.search(r'CORS_ALLOWED_ORIGINS\s*=\s*https?://[^:]+:(\d+)', content)
+                if match: self.frontend_port_var.set(match.group(1))
+        except IOError: pass # Fichier n'existe pas, on ignore.
 
     def apply_ports(self):
-        try: b_port, f_port = int(self.backend_port_var.get()), int(self.frontend_port_var.get())
-        except ValueError: messagebox.showerror("Port Invalide", "Veuillez entrer des numéros de port valides."); return
         try:
-            with open(self.frontend_env_file, 'r') as f: lines = f.readlines()
-            with open(self.frontend_env_file, 'w') as f:
-                for line in lines: f.write(f"VITE_API_BASE_URL=http://127.0.0.1:{b_port}/api\n" if line.strip().startswith('VITE_API_BASE_URL') else line)
+            b_port, f_port = int(self.backend_port_var.get()), int(self.frontend_port_var.get())
+        except ValueError:
+            messagebox.showerror("Port Invalide", "Veuillez entrer des numéros de port valides."); return
+        
+        try:
+            ### MODIFICATION ###: Crée le fichier .env.local s'il n'existe pas, sinon le met à jour.
+            if os.path.exists(self.frontend_env_file):
+                with open(self.frontend_env_file, 'r') as f: lines = f.readlines()
+                # Cherche et remplace la ligne, sinon l'ajoute.
+                line_found = False
+                with open(self.frontend_env_file, 'w') as f:
+                    for line in lines:
+                        if line.strip().startswith('VITE_API_BASE_URL'):
+                            f.write(f"VITE_API_BASE_URL=http://127.0.0.1:{b_port}/api\n")
+                            line_found = True
+                        else:
+                            f.write(line)
+                    if not line_found:
+                        f.write(f"VITE_API_BASE_URL=http://127.0.0.1:{b_port}/api\n")
+            else:
+                # Le fichier n'existe pas, on le crée.
+                with open(self.frontend_env_file, 'w') as f:
+                    f.write(f"VITE_API_BASE_URL=http://127.0.0.1:{b_port}/api\n")
+
+            # Met à jour le fichier .env du backend de la même manière.
             with open(self.backend_env_file, 'r') as f: lines = f.readlines()
             with open(self.backend_env_file, 'w') as f:
-                for line in lines: f.write(f"CORS_ALLOWED_ORIGINS=http://localhost:{f_port},http://127.0.0.1:{f_port}\n" if line.strip().startswith('CORS_ALLOWED_ORIGINS') else line)
+                for line in lines:
+                    f.write(f"CORS_ALLOWED_ORIGINS=http://localhost:{f_port},http://127.0.0.1:{f_port}\n" if line.strip().startswith('CORS_ALLOWED_ORIGINS') else line)
+            
             messagebox.showinfo("Succès", "Fichiers de configuration mis à jour.")
             self.load_backend_env_vars()
-        except Exception as e: messagebox.showerror("Erreur d'écriture", f"Impossible de mettre à jour les fichiers de configuration.\n{e}")
+        except Exception as e:
+            messagebox.showerror("Erreur d'écriture", f"Impossible de mettre à jour les fichiers de configuration.\n{e}")
 
     def get_command(self, service_key):
         b_port, f_port = self.backend_port_var.get(), self.frontend_port_var.get()
@@ -168,40 +205,41 @@ class ServiceManager(tk.Tk):
             with open(log_file_path, 'wb') as log_file:
                 si = subprocess.STARTUPINFO(); si.wShowWindow = subprocess.SW_HIDE; si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 
-                # ==================== LA CORRECTION FINALE EST ICI ====================
-                # CREATE_NEW_PROCESS_GROUP est la clé pour que le processus survive
-                # à la fermeture de la GUI mère.
                 proc = subprocess.Popen(
                     command, cwd=cwd, env=env, 
                     stdout=log_file, stderr=subprocess.STDOUT, 
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, 
                     startupinfo=si
                 )
-                # ====================================================================
 
             time.sleep(1.5)
             if self.is_process_running(proc.pid):
                 self._write_pid(key, proc.pid)
-            else: messagebox.showerror("Échec du Démarrage", f"Le service '{key}' n'a pas pu démarrer. Consultez le fichier de log pour plus de détails.")
-        except Exception as e: messagebox.showerror("Erreur", f"Erreur lors du lancement de '{key}':\n{e}")
+            else:
+                messagebox.showerror("Échec du Démarrage", f"Le service '{key}' n'a pas pu démarrer. Consultez le fichier de log pour plus de détails.")
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur lors du lancement de '{key}':\n{e}")
         self.sync_ui_with_pids()
 
     def stop_service(self, key):
         pid = self._read_pid(key)
         if pid:
             try:
-                # L'option /T est cruciale pour tuer l'arbre de processus (important pour Celery)
-                subprocess.run(f"taskkill /F /PID {pid} /T", check=True, capture_output=True)
-            except subprocess.CalledProcessError: pass
+                subprocess.run(f"taskkill /F /PID {pid} /T", check=True, capture_output=True, text=True, startupinfo=subprocess.STARTUPINFO(wShowWindow=subprocess.SW_HIDE))
+            except subprocess.CalledProcessError:
+                pass # Le processus n'existe peut-être déjà plus, c'est ok.
             self._delete_pid(key)
         self.sync_ui_with_pids()
 
     def view_log(self, key):
         log_path = self._get_log_path(key)
         if os.path.exists(log_path):
-            try: os.startfile(log_path)
-            except Exception as e: messagebox.showerror("Erreur", f"Impossible d'ouvrir le fichier de log:\n{e}")
-        else: messagebox.showinfo("Info", "Le fichier de log n'existe pas encore. Démarrez le service d'abord.")
+            try:
+                os.startfile(log_path)
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Impossible d'ouvrir le fichier de log:\n{e}")
+        else:
+            messagebox.showinfo("Info", "Le fichier de log n'existe pas encore. Démarrez le service d'abord.")
 
     def on_close(self):
         self.destroy()

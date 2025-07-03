@@ -1,7 +1,7 @@
 # install_rh_app_gui.py
-# Version 4.4 - Correction pour la création du super-utilisateur
-# - Ajout des champs Prénom/Nom pour le super-utilisateur Django pour satisfaire la commande --noinput.
-# - Logique de fallback pour le prénom si non fourni.
+# Version 4.5 - Correction et amélioration de la création du super-utilisateur
+# - La création du super-utilisateur est désormais optionnelle via une case à cocher.
+# - Correction du crash si l'email du super-utilisateur existe déjà.
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -244,31 +244,36 @@ class ConfigPage(WizardPage):
         # --- Super-utilisateur Django ---
         su_frame = ttk.LabelFrame(self, text="Super-utilisateur Django", padding=10)
         su_frame.grid(row=2, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
-        ### MODIFICATION ###: Ajout de first_name et last_name
+
+        ### AJOUT ###: Case à cocher pour rendre la création optionnelle
+        self.create_su_var = tk.BooleanVar(value=True)
+        su_check = ttk.Checkbutton(su_frame, text="Créer un compte administrateur", variable=self.create_su_var, command=self._toggle_su_fields)
+        su_check.grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=(0, 10))
+
         self.su_vars = {
-            "username": tk.StringVar(),
-            "email": tk.StringVar(),
-            "first_name": tk.StringVar(),
-            "last_name": tk.StringVar(),
-            "password": tk.StringVar(),
-            "password_confirm": tk.StringVar()
+            "username": tk.StringVar(), "email": tk.StringVar(), "first_name": tk.StringVar(),
+            "last_name": tk.StringVar(), "password": tk.StringVar(), "password_confirm": tk.StringVar()
         }
-        ttk.Label(su_frame, text="Nom d'utilisateur:").grid(row=0, column=0, sticky="w", padx=5, pady=3)
-        ttk.Entry(su_frame, textvariable=self.su_vars["username"]).grid(row=0, column=1, sticky="ew", padx=5, pady=3)
-        ttk.Label(su_frame, text="Email:").grid(row=1, column=0, sticky="w", padx=5, pady=3)
-        ttk.Entry(su_frame, textvariable=self.su_vars["email"]).grid(row=1, column=1, sticky="ew", padx=5, pady=3)
         
-        ### AJOUT ###: Champs pour le prénom et le nom
-        ttk.Label(su_frame, text="Prénom:").grid(row=2, column=0, sticky="w", padx=5, pady=3)
-        ttk.Entry(su_frame, textvariable=self.su_vars["first_name"]).grid(row=2, column=1, sticky="ew", padx=5, pady=3)
-        ttk.Label(su_frame, text="Nom (optionnel):").grid(row=3, column=0, sticky="w", padx=5, pady=3)
-        ttk.Entry(su_frame, textvariable=self.su_vars["last_name"]).grid(row=3, column=1, sticky="ew", padx=5, pady=3)
-        
-        ### MODIFICATION ###: Ajustement des numéros de ligne pour les mots de passe
-        ttk.Label(su_frame, text="Mot de passe:").grid(row=4, column=0, sticky="w", padx=5, pady=3)
-        ttk.Entry(su_frame, textvariable=self.su_vars["password"], show="*").grid(row=4, column=1, sticky="ew", padx=5, pady=3)
-        ttk.Label(su_frame, text="Confirmer le mot de passe:").grid(row=5, column=0, sticky="w", padx=5, pady=3)
-        ttk.Entry(su_frame, textvariable=self.su_vars["password_confirm"], show="*").grid(row=5, column=1, sticky="ew", padx=5, pady=3)
+        # ### MODIFICATION ###: Stocker les widgets d'entrée pour les activer/désactiver
+        self.su_entries = []
+
+        labels_and_vars = [
+            ("Nom d'utilisateur:", "username", {}),
+            ("Email:", "email", {}),
+            ("Prénom:", "first_name", {}),
+            ("Nom (optionnel):", "last_name", {}),
+            ("Mot de passe:", "password", {"show": "*"}),
+            ("Confirmer le mot de passe:", "password_confirm", {"show": "*"})
+        ]
+
+        for i, (label_text, key, opts) in enumerate(labels_and_vars):
+            row = i + 1
+            ttk.Label(su_frame, text=label_text).grid(row=row, column=0, sticky="w", padx=5, pady=3)
+            entry = ttk.Entry(su_frame, textvariable=self.su_vars[key], **opts)
+            entry.grid(row=row, column=1, sticky="ew", padx=5, pady=3)
+            self.su_entries.append(entry)
+
         su_frame.grid_columnconfigure(1, weight=1)
 
         # --- PostgreSQL ---
@@ -306,31 +311,29 @@ class ConfigPage(WizardPage):
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
 
+    ### AJOUT ###: Méthode pour activer/désactiver les champs du super-utilisateur
+    def _toggle_su_fields(self):
+        new_state = "normal" if self.create_su_var.get() else "disabled"
+        for entry in self.su_entries:
+            entry.config(state=new_state)
+
     def _ensure_package(self, package_name, import_name):
-        try:
-            return importlib.import_module(import_name)
+        try: return importlib.import_module(import_name)
         except ImportError:
             if messagebox.askyesno( "Dépendance Manquante", f"Le module Python '{import_name}' est requis mais non installé.\nVoulez-vous tenter de l'installer (via 'pip install {package_name}') ?"):
                 try:
-                    command = [sys.executable, '-m', 'pip', 'install', package_name]
-                    self.controller.update_idletasks()
-                    subprocess.check_call(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.check_call([sys.executable, '-m', 'pip', 'install', package_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     return importlib.import_module(import_name)
                 except (subprocess.CalledProcessError, Exception) as e:
                     messagebox.showerror("Échec de l'installation", f"Impossible d'installer '{package_name}'.\Veuillez l'installer manuellement.\nErreur: {e}")
-                    return None
-            else:
-                return None
+            return None
 
     def test_db_connection(self):
         psycopg2 = self._ensure_package('psycopg2-binary', 'psycopg2')
         if not psycopg2:
-            messagebox.showwarning("Validation Annulée", "Le module 'psycopg2' n'est pas disponible.")
-            if messagebox.askokcancel("Continuer ?", "Continuer sans valider la connexion à la base de données ?"):
+            if messagebox.askokcancel("Continuer ?", "Le test de connexion a été annulé car 'psycopg2' n'est pas disponible.\nVoulez-vous continuer sans valider ?"):
                 self.next_button.config(state="normal")
-            else: self.next_button.config(state="disabled")
             return
-
         try:
             conn = psycopg2.connect(dbname=self.db_vars["dbname"].get(), user=self.db_vars["user"].get(), password=self.db_vars["password"].get(), host=self.db_vars["host"].get(), port=self.db_vars["port"].get(), connect_timeout=3)
             conn.close()
@@ -341,40 +344,43 @@ class ConfigPage(WizardPage):
             self.next_button.config(state="disabled")
 
     def save_and_continue(self):
-        ### MODIFICATION ###: Validation et sauvegarde des champs du super-utilisateur
-        su_user = self.su_vars['username'].get().strip()
-        su_email = self.su_vars['email'].get().strip()
-        su_pass1 = self.su_vars['password'].get()
-        su_pass2 = self.su_vars['password_confirm'].get()
-        su_first_name = self.su_vars['first_name'].get().strip()
-        su_last_name = self.su_vars['last_name'].get().strip()
-
-        if not all([su_user, su_email, su_pass1]):
-            messagebox.showwarning("Champs Manquants", "Le nom d'utilisateur, l'email et le mot de passe du super-utilisateur sont requis.")
-            return
-        if su_pass1 != su_pass2:
-            messagebox.showerror("Erreur de Mot de Passe", "Les mots de passe du super-utilisateur ne correspondent pas.")
-            return
-
-        # Logique de fallback pour le prénom, pour éviter l'erreur de createsuperuser
-        if not su_first_name:
-            su_first_name = su_user
-            messagebox.showinfo("Information", f"Le champ 'Prénom' étant vide, il a été défini sur '{su_user}' par défaut.")
-
         config = self.controller.state.config
+        
+        ### MODIFICATION ###: La validation du super-utilisateur est maintenant conditionnelle
+        config['create_superuser'] = self.create_su_var.get()
+        if config['create_superuser']:
+            su_user = self.su_vars['username'].get().strip()
+            su_email = self.su_vars['email'].get().strip()
+            su_pass1 = self.su_vars['password'].get()
+            su_pass2 = self.su_vars['password_confirm'].get()
+            su_first_name = self.su_vars['first_name'].get().strip()
+            su_last_name = self.su_vars['last_name'].get().strip()
+
+            if not all([su_user, su_email, su_pass1]):
+                messagebox.showwarning("Champs Manquants", "Le nom d'utilisateur, l'email et le mot de passe du super-utilisateur sont requis.")
+                return
+            if su_pass1 != su_pass2:
+                messagebox.showerror("Erreur de Mot de Passe", "Les mots de passe du super-utilisateur ne correspondent pas.")
+                return
+            if not su_first_name:
+                su_first_name = su_user
+                messagebox.showinfo("Information", f"Le champ 'Prénom' étant vide, il a été défini sur '{su_user}' par défaut.")
+            
+            config['superuser_username'] = su_user
+            config['superuser_email'] = su_email
+            config['superuser_password'] = su_pass1
+            config['superuser_first_name'] = su_first_name
+            config['superuser_last_name'] = su_last_name
+
         config['allowed_hosts'] = self.allowed_hosts_var.get()
         config.update({f"db_{key}": var.get() for key, var in self.db_vars.items()})
         config.update({f"biostar_{key}": var.get() for key, var in self.biostar_vars.items()})
         config['redis_port'] = self.redis_port_var.get()
-        config['superuser_username'] = su_user
-        config['superuser_email'] = su_email
-        config['superuser_password'] = su_pass1
-        config['superuser_first_name'] = su_first_name
-        config['superuser_last_name'] = su_last_name
 
         if not all([config.get('biostar_url'), config.get('biostar_login')]):
             messagebox.showwarning("Champs Manquants", "Les informations pour BioStar 2 sont requises.")
             return
+            
         self.controller.show_frame(InstallProgressPage)
 
 # =============================================================================
@@ -408,7 +414,7 @@ class InstallProgressPage(WizardPage):
     def _execute(self, command, description, **kwargs):
         self.log(f"Exécution: {description}...")
         try:
-            process = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace', check=True, shell=True, **kwargs)
+            subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace', check=True, shell=True, **kwargs)
             self.log(f"Succès: {description}.", "SUCCESS")
         except subprocess.CalledProcessError as e:
             raise Exception(f"Échec de '{description}'. Erreur:\n{e.stderr or e.stdout}")
@@ -431,27 +437,19 @@ class InstallProgressPage(WizardPage):
             self.progress['value'] = 10; self.log("Étape 1: Clonage des dépôts...", "STEP")
             full_backend_path = os.path.join(install_path, "backend"); full_frontend_path = os.path.join(install_path, "frontend")
             pat = config.get('pat')
-            def build_clone_url(base_url):
-                if pat and base_url.startswith("https://"): return f"https://{pat}@{base_url[8:]}"
-                return base_url
+            def build_clone_url(base_url): return f"https://{pat}@{base_url[8:]}" if pat and base_url.startswith("https://") else base_url
             for name, url, path in [("Backend", config['backend_url'], full_backend_path), ("Frontend", config['frontend_url'], full_frontend_path)]:
-                clone_url = build_clone_url(url)
                 if os.path.exists(os.path.join(path, ".git")): self._execute(f'git -C "{path}" pull', f"Mise à jour {name}")
-                else: self._execute(f'git clone "{clone_url}" "{path}"', f"Clonage {name}")
+                else: self._execute(f'git clone "{build_clone_url(url)}" "{path}"', f"Clonage {name}")
             
             # --- 2. Génération .env ---
             self.progress['value'] = 20; self.log("Étape 2: Génération du fichier de configuration .env...", "STEP")
             secret_key = ''.join(random.choices(string.ascii_letters + string.digits + string.punctuation, k=60)).replace("'", "s").replace('"', 's').replace('`', 's')
             db_url = f"postgres://{config['db_user']}:{config['db_password']}@{config['db_host']}:{config['db_port']}/{config['db_dbname']}"
-            env_content = (f"DJANGO_SECRET_KEY='{secret_key}'\n"
-                           f"DJANGO_DEBUG=False\n"
-                           f"ALLOWED_HOSTS={config['allowed_hosts']}\n"
-                           f"DATABASE_URL='{db_url}'\n"
+            env_content = (f"DJANGO_SECRET_KEY='{secret_key}'\nDJANGO_DEBUG=False\nALLOWED_HOSTS={config['allowed_hosts']}\nDATABASE_URL='{db_url}'\n"
                            f"CORS_ALLOWED_ORIGINS=http://{config['allowed_hosts'].split(',')[0].strip()}:3000,https://{config['allowed_hosts'].split(',')[0].strip()}\n"
-                           f"CELERY_BROKER_URL='redis://localhost:{config['redis_port']}/0'\n"
-                           f"CELERY_RESULT_BACKEND='redis://localhost:{config['redis_port']}/0'\n"
-                           f"BIOSTAR_API_BASE_URL={config['biostar_url']}\n"
-                           f"BIOSTAR_ADMIN_LOGIN_ID={config['biostar_login']}\n"
+                           f"CELERY_BROKER_URL='redis://localhost:{config['redis_port']}/0'\nCELERY_RESULT_BACKEND='redis://localhost:{config['redis_port']}/0'\n"
+                           f"BIOSTAR_API_BASE_URL={config['biostar_url']}\nBIOSTAR_ADMIN_LOGIN_ID={config['biostar_login']}\n"
                            f"BIOSTAR_ADMIN_PASSWORD='{config['biostar_password']}'\n"
                            f"MOCK_BIOSTAR_API=False")
             with open(os.path.join(full_backend_path, ".env"), "w", encoding="utf-8") as f: f.write(env_content)
@@ -470,23 +468,24 @@ class InstallProgressPage(WizardPage):
             python_in_venv = os.path.join(venv_path, 'Scripts', 'python.exe')
             self._execute(f'"{python_in_venv}" manage.py migrate', "Migrations Django", cwd=full_backend_path, env=backend_env)
             
-            # --- 5. Création du super-utilisateur ---
-            self.progress['value'] = 80; self.log("Étape 5: Création du super-utilisateur...", "STEP")
-            superuser_env = backend_env.copy()
-            ### MODIFICATION ###: Ajout des variables d'environnement manquantes
-            superuser_env['DJANGO_SUPERUSER_USERNAME'] = config['superuser_username']
-            superuser_env['DJANGO_SUPERUSER_EMAIL'] = config['superuser_email']
-            superuser_env['DJANGO_SUPERUSER_PASSWORD'] = config['superuser_password']
-            superuser_env['DJANGO_SUPERUSER_FIRST_NAME'] = config['superuser_first_name']
-            superuser_env['DJANGO_SUPERUSER_LAST_NAME'] = config['superuser_last_name']
-            
-            try:
-                self._execute(f'"{python_in_venv}" manage.py createsuperuser --noinput', "Création du compte administrateur Django", cwd=full_backend_path, env=superuser_env)
-            except Exception as e:
-                if 'already exists' in str(e).lower():
-                    self.log(f"AVERTISSEMENT: Le super-utilisateur '{config['superuser_username']}' existe déjà. La création est ignorée.", "SUCCESS")
-                else:
-                    raise Exception(f"Échec de la création du super-utilisateur. Erreur:\n{e}")
+            # ### MODIFICATION ###: L'étape de création du super-utilisateur est maintenant entièrement conditionnelle
+            if config.get('create_superuser', False):
+                self.progress['value'] = 80; self.log("Étape 5: Création du super-utilisateur...", "STEP")
+                superuser_env = {**backend_env, 'DJANGO_SUPERUSER_USERNAME': config['superuser_username'], 'DJANGO_SUPERUSER_EMAIL': config['superuser_email'],
+                                 'DJANGO_SUPERUSER_PASSWORD': config['superuser_password'], 'DJANGO_SUPERUSER_FIRST_NAME': config['superuser_first_name'],
+                                 'DJANGO_SUPERUSER_LAST_NAME': config['superuser_last_name']}
+                try:
+                    self._execute(f'"{python_in_venv}" manage.py createsuperuser --noinput', "Création du compte administrateur Django", cwd=full_backend_path, env=superuser_env)
+                except Exception as e:
+                    error_str = str(e).lower()
+                    # ### MODIFICATION ###: Gestion améliorée des erreurs d'existence
+                    if 'already exists' in error_str or 'already taken' in error_str:
+                        self.log(f"AVERTISSEMENT: Le super-utilisateur (ou son email) '{config['superuser_username']}' existe déjà. Création ignorée.", "SUCCESS")
+                    else:
+                        raise Exception(f"Échec de la création du super-utilisateur. Erreur:\n{e}")
+            else:
+                self.log("Étape 5: Création du super-utilisateur ignorée (option désactivée).", "STEP")
+
 
             # --- 6. Build Frontend ---
             self.progress['value'] = 90; self.log("Étape 6: Compilation du Frontend...", "STEP")
